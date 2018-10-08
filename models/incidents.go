@@ -214,6 +214,8 @@ func (f FuncType) String() string {
 		return "variantSet"
 	case TypeAzureResourceList:
 		return "azureResources"
+	case TypeAzureAIApps:
+		return "azureAIApps"
 	default:
 		return "unknown"
 	}
@@ -232,6 +234,7 @@ const (
 	TypeTable
 	TypeVariantSet
 	TypeAzureResourceList
+	TypeAzureAIApps
 	TypeUnexpected
 )
 

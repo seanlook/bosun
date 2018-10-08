@@ -18,6 +18,8 @@ import (
 	"bosun.org/cmd/bosun/expr/parse"
 	"bosun.org/models"
 	"bosun.org/opentsdb"
+	ainsightsmgmt "github.com/Azure/azure-sdk-for-go/services/appinsights/mgmt/2015-05-01/insights"
+	ainsights "github.com/Azure/azure-sdk-for-go/services/appinsights/v1/insights"
 	"github.com/Azure/azure-sdk-for-go/services/preview/monitor/mgmt/2018-03-01/insights"
 	"github.com/Azure/azure-sdk-for-go/services/resources/mgmt/2018-02-01/resources"
 	"github.com/kylebrandt/boolq"
@@ -56,6 +58,20 @@ var AzureMonitor = map[string]parse.Func{
 		Args:   []models.FuncType{models.TypeAzureResourceList, models.TypeString},
 		Return: models.TypeAzureResourceList,
 		F:      AzureFilterResources,
+	},
+	// TODO: Rename
+	"azaiapps": {
+		Args:          []models.FuncType{},
+		Return:        models.TypeAzureAIApps, // TODO Return Type
+		F:             AzureAIListApps,
+		PrefixEnabled: true,
+	},
+	"azai": {
+		Args:          []models.FuncType{models.TypeString, models.TypeString, models.TypeAzureAIApps, models.TypeString, models.TypeString, models.TypeString, models.TypeString},
+		Return:        models.TypeSeriesSet,
+		Tags:          azMultiTags,
+		F:             AzureAIQuery,
+		PrefixEnabled: true,
 	},
 }
 
@@ -437,6 +453,73 @@ func AzureFilterResources(e *State, resources AzureResources, filter string) (r 
 	return
 }
 
+func AzureAIListApps(prefix string, e *State) (r *Results, err error) {
+	r = new(Results)
+	// Verify prefix is a defined resource and fetch the collection of clients
+	cc, clientFound := e.Backends.AzureMonitor[prefix]
+	if !clientFound {
+		return r, fmt.Errorf(`azure client with name "%v" not defined`, prefix)
+	}
+	c := cc.AIComponentsClient
+	applist := AzureApplicationInsightsApps{Prefix: prefix}
+	for rList, err := c.ListComplete(context.Background()); rList.NotDone(); err = rList.Next() {
+		if err != nil {
+			return r, err
+		}
+		comp := rList.Value()
+		if comp.ID != nil && comp.ApplicationInsightsComponentProperties != nil && comp.ApplicationInsightsComponentProperties.AppID != nil {
+			applist.Applications = append(applist.Applications, AzureApplicationInsightsApp{
+				ApplicationName: *comp.Name,
+				AppId:           *comp.ApplicationInsightsComponentProperties.AppID,
+			})
+		}
+	}
+	r.Results = append(r.Results, &Result{Value: applist})
+	return
+}
+
+func AzureAIQuery(prefix string, e *State, metric, segment string, apps AzureApplicationInsightsApps, agtype, interval, sdur, edur string) (r *Results, err error) {
+	r = new(Results)
+	if apps.Prefix != prefix {
+		return r, fmt.Errorf(`mismatched Azure clients: attempting to use resources from client "%v" on a query with client "%v"`, apps.Prefix, prefix)
+	}
+	cc, clientFound := e.Backends.AzureMonitor[prefix]
+	if !clientFound {
+		return r, fmt.Errorf(`azure client with name "%v" not defined`, prefix)
+	}
+	c := cc.AIMetricsClient
+	// Parse Relative Time to absolute time
+	sd, err := opentsdb.ParseDuration(sdur)
+	if err != nil {
+		return
+	}
+	var ed opentsdb.Duration
+	if edur != "" {
+		ed, err = opentsdb.ParseDuration(edur)
+		if err != nil {
+			return
+		}
+	}
+	st := e.now.Add(time.Duration(-sd)).Format(azTimeFmt)
+	en := e.now.Add(time.Duration(-ed)).Format(azTimeFmt)
+	app := apps.Applications[0]
+	res, err := c.Get(context.Background(), app.AppId, ainsights.MetricID(metric), fmt.Sprintf("%s/%s", st, en), nil, []ainsights.MetricsAggregation{ainsights.MetricsAggregation(agtype)}, []ainsights.MetricsSegment{ainsights.MetricsSegment(segment)}, nil, "", "")
+	if err != nil {
+		return r, err
+	}
+	fmt.Println(res.Value.Segments)
+	return
+}
+
+type AzureApplicationInsightsApp struct {
+	ApplicationName string
+	AppId           string
+}
+type AzureApplicationInsightsApps struct {
+	Applications []AzureApplicationInsightsApp
+	Prefix       string
+}
+
 // AzureResource is a container for Azure resource information that Bosun can interact with
 type AzureResource struct {
 	Name          string
@@ -514,6 +597,8 @@ type AzureMonitorClientCollection struct {
 	MetricsClient           insights.MetricsClient
 	MetricDefinitionsClient insights.MetricDefinitionsClient
 	ResourcesClient         resources.Client
+	AIComponentsClient      ainsightsmgmt.ComponentsClient
+	AIMetricsClient         ainsights.MetricsClient
 	Concurrency             int
 	TenantId                string
 }

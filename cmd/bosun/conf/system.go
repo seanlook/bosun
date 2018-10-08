@@ -14,6 +14,9 @@ import (
 	"bosun.org/cmd/bosun/expr"
 	"bosun.org/graphite"
 	"bosun.org/opentsdb"
+	ainsightsmgmt "github.com/Azure/azure-sdk-for-go/services/appinsights/mgmt/2015-05-01/insights"
+	ainsights "github.com/Azure/azure-sdk-for-go/services/appinsights/v1/insights"
+
 	"github.com/Azure/azure-sdk-for-go/services/preview/monitor/mgmt/2018-03-01/insights"
 	"github.com/Azure/azure-sdk-for-go/services/resources/mgmt/2018-02-01/resources"
 	"github.com/Azure/go-autorest/autorest"
@@ -625,6 +628,8 @@ func (sc *SystemConf) GetAzureMonitorContext() expr.AzureMonitorClients {
 		clients.MetricsClient = insights.NewMetricsClient(conf.SubscriptionId)
 		clients.MetricDefinitionsClient = insights.NewMetricDefinitionsClient(conf.SubscriptionId)
 		clients.ResourcesClient = resources.NewClient(conf.SubscriptionId)
+		clients.AIComponentsClient = ainsightsmgmt.NewComponentsClient(conf.SubscriptionId)
+		clients.AIMetricsClient = ainsights.NewMetricsClient()
 		if conf.DebugRequest {
 			clients.ResourcesClient.RequestInspector, clients.MetricsClient.RequestInspector, clients.MetricDefinitionsClient.RequestInspector = azureLogRequest(), azureLogRequest(), azureLogRequest()
 		}
@@ -639,6 +644,9 @@ func (sc *SystemConf) GetAzureMonitorContext() expr.AzureMonitorClients {
 			slog.Error("unexpected Azure Authorizer error: ", err)
 		}
 		clients.MetricsClient.Authorizer, clients.MetricDefinitionsClient.Authorizer, clients.ResourcesClient.Authorizer = at, at, at
+		clients.AIComponentsClient.Authorizer, clients.AIMetricsClient.Authorizer = at, at
+		clients.AIMetricsClient.RequestInspector = azureLogRequest()
+		clients.AIMetricsClient.ResponseInspector = azureLogResponse()
 		allClients[prefix] = clients
 	}
 	return allClients
