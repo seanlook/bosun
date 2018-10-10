@@ -502,8 +502,14 @@ func AzureAIQuery(prefix string, e *State, metric, segment string, apps AzureApp
 	}
 	st := e.now.Add(time.Duration(-sd)).Format(azTimeFmt)
 	en := e.now.Add(time.Duration(-ed)).Format(azTimeFmt)
+	var tg string
+	if interval != "" {
+		tg = *azureIntervalToTimegrain(interval)
+	} else {
+		tg = "PT1M"
+	}
 	app := apps.Applications[0]
-	res, err := c.Get(context.Background(), app.AppId, ainsights.MetricID(metric), fmt.Sprintf("%s/%s", st, en), nil, []ainsights.MetricsAggregation{ainsights.MetricsAggregation(agtype)}, []ainsights.MetricsSegment{ainsights.MetricsSegment(segment)}, nil, "", "")
+	res, err := c.Get(context.Background(), app.AppId, ainsights.MetricID(metric), fmt.Sprintf("%s/%s", st, en), &tg, []ainsights.MetricsAggregation{ainsights.MetricsAggregation(agtype)}, []ainsights.MetricsSegment{ainsights.MetricsSegment(segment)}, nil, "", "")
 	if err != nil {
 		return r, err
 	}

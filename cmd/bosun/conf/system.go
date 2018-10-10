@@ -643,8 +643,14 @@ func (sc *SystemConf) GetAzureMonitorContext() expr.AzureMonitorClients {
 			// This is checked before because this method is not called until the an expression is called
 			slog.Error("unexpected Azure Authorizer error: ", err)
 		}
+		rcc := auth.NewClientCredentialsConfig(conf.ClientId, conf.ClientSecret, conf.TenantId)
+		rcc.Resource = "https://api.applicationinsights.io"
+		rat, err := rcc.Authorizer()
+		if err != nil {
+			slog.Error("unexpected app insights Azure Authorizer error: ", err)
+		}
 		clients.MetricsClient.Authorizer, clients.MetricDefinitionsClient.Authorizer, clients.ResourcesClient.Authorizer = at, at, at
-		clients.AIComponentsClient.Authorizer, clients.AIMetricsClient.Authorizer = at, at
+		clients.AIComponentsClient.Authorizer, clients.AIMetricsClient.Authorizer = at, rat
 		clients.AIMetricsClient.RequestInspector = azureLogRequest()
 		clients.AIMetricsClient.ResponseInspector = azureLogResponse()
 		allClients[prefix] = clients
