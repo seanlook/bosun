@@ -2,6 +2,7 @@ package expr
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -478,7 +479,7 @@ func AzureAIListApps(prefix string, e *State) (r *Results, err error) {
 	return
 }
 
-func AzureAIQuery(prefix string, e *State, metric, segment string, apps AzureApplicationInsightsApps, agtype, interval, sdur, edur string) (r *Results, err error) {
+func AzureAIQuery(prefix string, e *State, metric, segmentCSV string, apps AzureApplicationInsightsApps, agtype, interval, sdur, edur string) (r *Results, err error) {
 	r = new(Results)
 	if apps.Prefix != prefix {
 		return r, fmt.Errorf(`mismatched Azure clients: attempting to use resources from client "%v" on a query with client "%v"`, apps.Prefix, prefix)
@@ -508,13 +509,91 @@ func AzureAIQuery(prefix string, e *State, metric, segment string, apps AzureApp
 	} else {
 		tg = "PT1M"
 	}
-	app := apps.Applications[0]
-	res, err := c.Get(context.Background(), app.AppId, ainsights.MetricID(metric), fmt.Sprintf("%s/%s", st, en), &tg, []ainsights.MetricsAggregation{ainsights.MetricsAggregation(agtype)}, []ainsights.MetricsSegment{ainsights.MetricsSegment(segment)}, nil, "", "")
-	if err != nil {
-		return r, err
+	segments := []ainsights.MetricsSegment{}
+	for _, s := range strings.Split(segmentCSV, ",") {
+		segments = append(segments, ainsights.MetricsSegment(s))
 	}
-	fmt.Println(res.Value.Segments)
-	return
+	agg := []ainsights.MetricsAggregation{ainsights.MetricsAggregation(agtype)}
+
+	seriesMap := make(map[string]Series)
+	for _, app := range apps.Applications {
+		appName, err := opentsdb.Clean(app.ApplicationName)
+		if err != nil {
+			return r, err
+		}
+		res, err := c.Get(context.Background(), app.AppId, ainsights.MetricID(metric), fmt.Sprintf("%s/%s", st, en), &tg, agg, segments, nil, "", "")
+		if err != nil {
+			return r, err
+		}
+		j, err := json.MarshalIndent(res.Value, "", "  ")
+		if err != nil {
+			return r, err
+		}
+		fmt.Println(string(j))
+		for _, seg := range *res.Value.Segments {
+			if met, ok := seg.AdditionalProperties[metric]; ok {
+				if metMap, ok := met.(map[string]interface{}); ok {
+					if metVal, ok := metMap[agtype]; ok {
+						tags := opentsdb.TagSet{
+							"app": appName,
+						}
+						for _, v := range segments {
+							if tagV, found := metMap[string(v)]; found {
+								cleanedKey, err := opentsdb.Clean(string(v))
+								if err != nil {
+									return r, err
+								}
+								cleanedValue, err := opentsdb.Clean(tagV.(string))
+								if err != nil {
+									return r, err
+								}
+								tags[cleanedKey] = cleanedValue
+							}
+						}
+						if _, ok := seriesMap[tags.Tags()]; !ok {
+							seriesMap[tags.Tags()] = make(Series)
+						}
+
+						if v, ok := metVal.(float64); ok && seg.Start != nil {
+							seriesMap[tags.Tags()][seg.Start.Time] = v
+						}
+					}
+				}
+			}
+		}
+	}
+	for k, series := range seriesMap {
+		tags, err := opentsdb.ParseTags(k)
+		if err != nil {
+			return r, err
+		}
+		r.Results = append(r.Results, &Result{
+			Value: series,
+			Group: tags,
+		})
+	}
+
+	// for _, app := range apps.Applications {
+	// 	res, err := c.Get(context.Background(), app.AppId, ainsights.MetricID(metric), fmt.Sprintf("%s/%s", st, en), &tg, []ainsights.MetricsAggregation{ainsights.MetricsAggregation(agtype)}, []ainsights.MetricsSegment{ainsights.MetricsSegment(segment)}, nil, "", "")
+	// 	if err != nil {
+	// 		return r, err
+	// 	}
+	// 	if res.Value == nil || res.Value.Segments == nil {
+	// 		continue
+	// 	}
+	// 	for _, seg := range *res.Value.Segments {
+	// 		series := make(Series)
+
+	// 		if met, ok := seg.AdditionalProperties[metric]; ok {
+	// 			if metMap, ok := met.(map[string]interface{}); ok {
+	// 				if metVal, ok := metMap[agtype]; ok {
+
+	// 				}
+	// 			}
+	// 		}
+	// 	}
+	// }
+	return r, nil
 }
 
 type AzureApplicationInsightsApp struct {
