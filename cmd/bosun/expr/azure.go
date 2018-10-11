@@ -2,7 +2,6 @@ package expr
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -513,6 +512,7 @@ func AzureAIQuery(prefix string, e *State, metric, segmentCSV string, apps Azure
 	for _, s := range strings.Split(segmentCSV, ",") {
 		segments = append(segments, ainsights.MetricsSegment(s))
 	}
+	hasSegments := segments[0] != ""
 	agg := []ainsights.MetricsAggregation{ainsights.MetricsAggregation(agtype)}
 
 	seriesMap := make(map[string]Series)
@@ -525,37 +525,63 @@ func AzureAIQuery(prefix string, e *State, metric, segmentCSV string, apps Azure
 		if err != nil {
 			return r, err
 		}
-		j, err := json.MarshalIndent(res.Value, "", "  ")
-		if err != nil {
-			return r, err
-		}
-		fmt.Println(string(j))
-		for _, seg := range *res.Value.Segments {
-			if met, ok := seg.AdditionalProperties[metric]; ok {
-				if metMap, ok := met.(map[string]interface{}); ok {
-					if metVal, ok := metMap[agtype]; ok {
-						tags := opentsdb.TagSet{
-							"app": appName,
-						}
-						for _, v := range segments {
-							if tagV, found := metMap[string(v)]; found {
-								cleanedKey, err := opentsdb.Clean(string(v))
+		if hasSegments {
+			for _, seg := range *res.Value.Segments {
+				basetags := opentsdb.TagSet{
+					"app": appName,
+				}
+				next := &seg
+				if len(segments) > 1 {
+					next = &(*next.Segments)[0]
+				}
+				for i := 0; i < len(segments)-1; i++ {
+					basetags[string(segments[i])] = next.AdditionalProperties[string(segments[i])].(string)
+					if i != len(segments)-2 {
+						next = &(*next.Segments)[0]
+					}
+				}
+				for _, innerSeg := range *next.Segments {
+					if met, ok := innerSeg.AdditionalProperties[metric]; ok {
+						if metMap, ok := met.(map[string]interface{}); ok {
+							if metVal, ok := metMap[agtype]; ok {
+								tags := opentsdb.TagSet{}
+								if len(segments) > 0 {
+									key := string(segments[len(segments)-1])
+									tags[key] = innerSeg.AdditionalProperties[key].(string)
+								}
+								tags = tags.Merge(basetags)
+								err := tags.Clean()
 								if err != nil {
 									return r, err
 								}
-								cleanedValue, err := opentsdb.Clean(tagV.(string))
-								if err != nil {
-									return r, err
+								if _, ok := seriesMap[tags.Tags()]; !ok {
+									seriesMap[tags.Tags()] = make(Series)
 								}
-								tags[cleanedKey] = cleanedValue
+
+								if v, ok := metVal.(float64); ok && seg.Start != nil {
+									seriesMap[tags.Tags()][seg.Start.Time] = v
+								}
 							}
 						}
-						if _, ok := seriesMap[tags.Tags()]; !ok {
-							seriesMap[tags.Tags()] = make(Series)
-						}
-
-						if v, ok := metVal.(float64); ok && seg.Start != nil {
-							seriesMap[tags.Tags()][seg.Start.Time] = v
+					}
+				}
+			}
+		} else {
+			for _, seg := range *res.Value.Segments {
+				if met, ok := seg.AdditionalProperties[metric]; ok {
+					if metMap, ok := met.(map[string]interface{}); ok {
+						if metVal, ok := metMap[agtype]; ok {
+							tags := opentsdb.TagSet{"app": appName}
+							err := tags.Clean()
+							if err != nil {
+								return r, err
+							}
+							if _, ok := seriesMap[tags.Tags()]; !ok {
+								seriesMap[tags.Tags()] = make(Series)
+							}
+							if v, ok := metVal.(float64); ok && seg.Start != nil {
+								seriesMap[tags.Tags()][seg.Start.Time] = v
+							}
 						}
 					}
 				}
@@ -572,27 +598,6 @@ func AzureAIQuery(prefix string, e *State, metric, segmentCSV string, apps Azure
 			Group: tags,
 		})
 	}
-
-	// for _, app := range apps.Applications {
-	// 	res, err := c.Get(context.Background(), app.AppId, ainsights.MetricID(metric), fmt.Sprintf("%s/%s", st, en), &tg, []ainsights.MetricsAggregation{ainsights.MetricsAggregation(agtype)}, []ainsights.MetricsSegment{ainsights.MetricsSegment(segment)}, nil, "", "")
-	// 	if err != nil {
-	// 		return r, err
-	// 	}
-	// 	if res.Value == nil || res.Value.Segments == nil {
-	// 		continue
-	// 	}
-	// 	for _, seg := range *res.Value.Segments {
-	// 		series := make(Series)
-
-	// 		if met, ok := seg.AdditionalProperties[metric]; ok {
-	// 			if metMap, ok := met.(map[string]interface{}); ok {
-	// 				if metVal, ok := metMap[agtype]; ok {
-
-	// 				}
-	// 			}
-	// 		}
-	// 	}
-	// }
 	return r, nil
 }
 

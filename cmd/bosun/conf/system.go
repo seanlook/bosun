@@ -651,8 +651,8 @@ func (sc *SystemConf) GetAzureMonitorContext() expr.AzureMonitorClients {
 		}
 		clients.MetricsClient.Authorizer, clients.MetricDefinitionsClient.Authorizer, clients.ResourcesClient.Authorizer = at, at, at
 		clients.AIComponentsClient.Authorizer, clients.AIMetricsClient.Authorizer = at, rat
-		clients.AIMetricsClient.RequestInspector = azureLogRequest()
-		clients.AIMetricsClient.ResponseInspector = azureLogResponse()
+		// clients.AIMetricsClient.RequestInspector = azureLogRequest()
+		// clients.AIMetricsClient.ResponseInspector = azureLogResponse()
 		allClients[prefix] = clients
 	}
 	return allClients
