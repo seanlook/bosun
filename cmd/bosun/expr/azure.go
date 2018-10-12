@@ -516,7 +516,8 @@ func AzureAIQuery(prefix string, e *State, metric, segmentCSV string, apps Azure
 	agg := []ainsights.MetricsAggregation{ainsights.MetricsAggregation(agtype)}
 
 	seriesMap := make(map[string]Series)
-	for _, app := range apps.Applications {
+
+	for _, app := range apps.Applications[0:2] {
 		appName, err := opentsdb.Clean(app.ApplicationName)
 		if err != nil {
 			return r, err
@@ -541,49 +542,60 @@ func AzureAIQuery(prefix string, e *State, metric, segmentCSV string, apps Azure
 					}
 				}
 				for _, innerSeg := range *next.Segments {
-					if met, ok := innerSeg.AdditionalProperties[metric]; ok {
-						if metMap, ok := met.(map[string]interface{}); ok {
-							if metVal, ok := metMap[agtype]; ok {
-								tags := opentsdb.TagSet{}
-								if len(segments) > 0 {
-									key := string(segments[len(segments)-1])
-									tags[key] = innerSeg.AdditionalProperties[key].(string)
-								}
-								tags = tags.Merge(basetags)
-								err := tags.Clean()
-								if err != nil {
-									return r, err
-								}
-								if _, ok := seriesMap[tags.Tags()]; !ok {
-									seriesMap[tags.Tags()] = make(Series)
-								}
-
-								if v, ok := metVal.(float64); ok && seg.Start != nil {
-									seriesMap[tags.Tags()][seg.Start.Time] = v
-								}
-							}
-						}
+					met, ok := innerSeg.AdditionalProperties[metric]
+					if !ok {
+						return r, fmt.Errorf("expected additional properties not found on inner segment while handling azure query")
+					}
+					metMap, ok := met.(map[string]interface{})
+					if !ok {
+						return r, fmt.Errorf("unexpected type for additional properties not found on inner segment while handling azure query")
+					}
+					metVal, ok := metMap[agtype]
+					if !ok {
+						return r, fmt.Errorf("expected aggregation value for aggregation %v not found on inner segment while handling azure query", agtype)
+					}
+					tags := opentsdb.TagSet{}
+					if len(segments) > 0 {
+						key := string(segments[len(segments)-1])
+						tags[key] = innerSeg.AdditionalProperties[key].(string)
+					}
+					tags = tags.Merge(basetags)
+					err := tags.Clean()
+					if err != nil {
+						return r, err
+					}
+					if _, ok := seriesMap[tags.Tags()]; !ok {
+						seriesMap[tags.Tags()] = make(Series)
+					}
+					if v, ok := metVal.(float64); ok && seg.Start != nil {
+						seriesMap[tags.Tags()][seg.Start.Time] = v
 					}
 				}
 			}
 		} else {
 			for _, seg := range *res.Value.Segments {
-				if met, ok := seg.AdditionalProperties[metric]; ok {
-					if metMap, ok := met.(map[string]interface{}); ok {
-						if metVal, ok := metMap[agtype]; ok {
-							tags := opentsdb.TagSet{"app": appName}
-							err := tags.Clean()
-							if err != nil {
-								return r, err
-							}
-							if _, ok := seriesMap[tags.Tags()]; !ok {
-								seriesMap[tags.Tags()] = make(Series)
-							}
-							if v, ok := metVal.(float64); ok && seg.Start != nil {
-								seriesMap[tags.Tags()][seg.Start.Time] = v
-							}
-						}
-					}
+				met, ok := seg.AdditionalProperties[metric]
+				if !ok {
+					return r, fmt.Errorf("expected additional properties not found on inner segment while handling azure query")
+				}
+				metMap, ok := met.(map[string]interface{})
+				if !ok {
+					return r, fmt.Errorf("unexpected type for additional properties not found on inner segment while handling azure query")
+				}
+				metVal, ok := metMap[agtype]
+				if !ok {
+					return r, fmt.Errorf("expected aggregation value for aggregation %v not found on inner segment while handling azure query", agtype)
+				}
+				tags := opentsdb.TagSet{"app": appName}
+				err := tags.Clean()
+				if err != nil {
+					return r, err
+				}
+				if _, ok := seriesMap[tags.Tags()]; !ok {
+					seriesMap[tags.Tags()] = make(Series)
+				}
+				if v, ok := metVal.(float64); ok && seg.Start != nil {
+					seriesMap[tags.Tags()][seg.Start.Time] = v
 				}
 			}
 		}
