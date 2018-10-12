@@ -55,10 +55,32 @@ func AzureAIQuery(prefix string, e *State, metric, segmentCSV string, apps Azure
 		if err != nil {
 			return r, err
 		}
-		res, err := c.Get(context.Background(), app.AppId, ainsights.MetricID(metric), fmt.Sprintf("%s/%s", st, en), &tg, agg, segments, nil, "", "")
+		cacheKey := strings.Join([]string{prefix, app.AppId, metric, fmt.Sprintf("%s/%s", st, en), tg, agtype, segmentCSV}, ":")
+		getFn := func() (interface{}, error) {
+			req, err := c.GetPreparer(context.Background(), app.AppId, ainsights.MetricID(metric), fmt.Sprintf("%s/%s", st, en), &tg, agg, segments, nil, "", "")
+			if err != nil {
+				return nil, err
+			}
+			var resp ainsights.MetricsResult
+			e.Timer.StepCustomTiming("azureai", "query", req.URL.String(), func() {
+				hr, sendErr := c.GetSender(req)
+				if sendErr == nil {
+					resp, err = c.GetResponder(hr)
+				} else {
+					err = sendErr
+				}
+			})
+			return resp, err
+		}
 		if err != nil {
 			return r, err
 		}
+		val, err, hit := e.Cache.Get(cacheKey, getFn)
+		if err != nil {
+			return r, err
+		}
+		collectCacheHit(e.Cache, "azureai_ts", hit)
+		res := val.(ainsights.MetricsResult)
 		if hasSegments {
 			for _, seg := range *res.Value.Segments {
 				basetags := opentsdb.TagSet{
