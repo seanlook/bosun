@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"bosun.org/cmd/bosun/expr/parse"
 	"bosun.org/opentsdb"
 	ainsights "github.com/Azure/azure-sdk-for-go/services/appinsights/v1/insights"
 )
@@ -154,28 +155,50 @@ type AzureApplicationInsightsApps struct {
 	Prefix       string
 }
 
-
 func AzureAIListApps(prefix string, e *State) (r *Results, err error) {
 	r = new(Results)
 	// Verify prefix is a defined resource and fetch the collection of clients
-	cc, clientFound := e.Backends.AzureMonitor[prefix]
-	if !clientFound {
-		return r, fmt.Errorf(`azure client with name "%v" not defined`, prefix)
-	}
-	c := cc.AIComponentsClient
-	applist := AzureApplicationInsightsApps{Prefix: prefix}
-	for rList, err := c.ListComplete(context.Background()); rList.NotDone(); err = rList.Next() {
-		if err != nil {
-			return r, err
+	key := fmt.Sprintf("AzureAIAppCache:%s:%s", prefix, time.Now().Truncate(time.Minute*1)) // https://github.com/golang/groupcache/issues/92
+
+	getFn := func() (interface{}, error) {
+		cc, clientFound := e.Backends.AzureMonitor[prefix]
+		if !clientFound {
+			return r, fmt.Errorf(`azure client with name "%v" not defined`, prefix)
 		}
-		comp := rList.Value()
-		if comp.ID != nil && comp.ApplicationInsightsComponentProperties != nil && comp.ApplicationInsightsComponentProperties.AppID != nil {
-			applist.Applications = append(applist.Applications, AzureApplicationInsightsApp{
-				ApplicationName: *comp.Name,
-				AppId:           *comp.ApplicationInsightsComponentProperties.AppID,
-			})
+		c := cc.AIComponentsClient
+		applist := AzureApplicationInsightsApps{Prefix: prefix}
+		for rList, err := c.ListComplete(context.Background()); rList.NotDone(); err = rList.Next() {
+			if err != nil {
+				return r, err
+			}
+			comp := rList.Value()
+			if comp.ID != nil && comp.ApplicationInsightsComponentProperties != nil && comp.ApplicationInsightsComponentProperties.AppID != nil {
+				applist.Applications = append(applist.Applications, AzureApplicationInsightsApp{
+					ApplicationName: *comp.Name,
+					AppId:           *comp.ApplicationInsightsComponentProperties.AppID,
+				})
+			}
 		}
+		r.Results = append(r.Results, &Result{Value: applist})
+		return r, nil
 	}
-	r.Results = append(r.Results, &Result{Value: applist})
-	return
+	val, err, hit := e.Cache.Get(key, getFn)
+	collectCacheHit(e.Cache, "azure_aiapplist", hit)
+	if err != nil {
+		return r, err
+	}
+	return val.(*Results), nil
+}
+
+// azAITags is the tag function for the "az" expression function
+func azAITags(args []parse.Node) (parse.Tags, error) {
+	tags := parse.Tags{"app": struct{}{}}
+	csvTags := strings.Split(args[1].(*parse.StringNode).Text, ",")
+	if len(csvTags) == 1 && csvTags[0] == "" {
+		return tags, nil
+	}
+	for _, k := range csvTags {
+		tags[k] = struct{}{}
+	}
+	return tags, nil
 }

@@ -69,7 +69,7 @@ var AzureMonitor = map[string]parse.Func{
 	"azai": {
 		Args:          []models.FuncType{models.TypeString, models.TypeString, models.TypeAzureAIApps, models.TypeString, models.TypeString, models.TypeString, models.TypeString},
 		Return:        models.TypeSeriesSet,
-		Tags:          azMultiTags,
+		Tags:          azAITags,
 		F:             AzureAIQuery,
 		PrefixEnabled: true,
 	},
