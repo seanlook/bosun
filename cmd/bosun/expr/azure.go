@@ -60,14 +60,20 @@ var AzureMonitor = map[string]parse.Func{
 		F:      AzureFilterResources,
 	},
 	// Azure function for application insights, See azureai.go
-	"azaiapps": {
+	"aiapp": {
 		Args:          []models.FuncType{},
-		Return:        models.TypeAzureAIApps, // TODO Return Type
+		Return:        models.TypeAzureAIApps,
 		F:             AzureAIListApps,
 		PrefixEnabled: true,
 	},
-	"azai": {
-		Args:          []models.FuncType{models.TypeString, models.TypeString, models.TypeAzureAIApps, models.TypeString, models.TypeString, models.TypeString, models.TypeString},
+	"aiappf": {
+		Args:          []models.FuncType{models.TypeAzureAIApps, models.TypeString},
+		Return:        models.TypeAzureAIApps,
+		F:             AzureAIFilterApps,
+		PrefixEnabled: true,
+	},
+	"ai": {
+		Args:          []models.FuncType{models.TypeString, models.TypeString, models.TypeString, models.TypeAzureAIApps, models.TypeString, models.TypeString, models.TypeString, models.TypeString},
 		Return:        models.TypeSeriesSet,
 		Tags:          azAITags,
 		F:             AzureAIQuery,

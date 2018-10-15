@@ -3,18 +3,20 @@ package expr
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"bosun.org/cmd/bosun/expr/parse"
 	"bosun.org/opentsdb"
 	ainsights "github.com/Azure/azure-sdk-for-go/services/appinsights/v1/insights"
+	"github.com/kylebrandt/boolq"
 )
 
-func AzureAIQuery(prefix string, e *State, metric, segmentCSV string, apps AzureApplicationInsightsApps, agtype, interval, sdur, edur string) (r *Results, err error) {
+func AzureAIQuery(prefix string, e *State, metric, segmentCSV, filter string, apps AzureApplicationInsightsApps, agtype, interval, sdur, edur string) (r *Results, err error) {
 	r = new(Results)
 	if apps.Prefix != prefix {
-		return r, fmt.Errorf(`mismatched Azure clients: attempting to use resources from client "%v" on a query with client "%v"`, apps.Prefix, prefix)
+		return r, fmt.Errorf(`mismatched Azure clients: attempting to use apps from client "%v" on a query with client "%v"`, apps.Prefix, prefix)
 	}
 	cc, clientFound := e.Backends.AzureMonitor[prefix]
 	if !clientFound {
@@ -50,14 +52,14 @@ func AzureAIQuery(prefix string, e *State, metric, segmentCSV string, apps Azure
 
 	seriesMap := make(map[string]Series)
 
-	for _, app := range apps.Applications[0:2] {
+	for _, app := range apps.Applications {
 		appName, err := opentsdb.Clean(app.ApplicationName)
 		if err != nil {
 			return r, err
 		}
-		cacheKey := strings.Join([]string{prefix, app.AppId, metric, fmt.Sprintf("%s/%s", st, en), tg, agtype, segmentCSV}, ":")
+		cacheKey := strings.Join([]string{prefix, app.AppId, metric, fmt.Sprintf("%s/%s", st, en), tg, agtype, segmentCSV, filter}, ":")
 		getFn := func() (interface{}, error) {
-			req, err := c.GetPreparer(context.Background(), app.AppId, ainsights.MetricID(metric), fmt.Sprintf("%s/%s", st, en), &tg, agg, segments, nil, "", "")
+			req, err := c.GetPreparer(context.Background(), app.AppId, ainsights.MetricID(metric), fmt.Sprintf("%s/%s", st, en), &tg, agg, segments, nil, "", filter)
 			if err != nil {
 				return nil, err
 			}
@@ -171,10 +173,63 @@ func AzureAIQuery(prefix string, e *State, metric, segmentCSV string, apps Azure
 type AzureApplicationInsightsApp struct {
 	ApplicationName string
 	AppId           string
+	Tags            map[string]string
 }
 type AzureApplicationInsightsApps struct {
 	Applications []AzureApplicationInsightsApp
 	Prefix       string
+}
+
+func AzureAIFilterApps(prefix string, e *State, apps AzureApplicationInsightsApps, filter string) (r *Results, err error) {
+	r = new(Results)
+	// Parse the filter once and then apply it to each item in the loop
+	bqf, err := boolq.Parse(filter)
+	if err != nil {
+		return r, err
+	}
+	filteredApps := AzureApplicationInsightsApps{Prefix: apps.Prefix}
+	for _, app := range apps.Applications {
+		match, err := boolq.AskParsedExpr(bqf, app)
+		if err != nil {
+			return r, err
+		}
+		if match {
+			filteredApps.Applications = append(filteredApps.Applications, app)
+		}
+	}
+	r.Results = append(r.Results, &Result{Value: filteredApps})
+	return
+}
+
+func (app AzureApplicationInsightsApp) Ask(filter string) (bool, error) {
+	sp := strings.SplitN(filter, ":", 2)
+	if len(sp) != 2 {
+		return false, fmt.Errorf("bad filter, filter must be in k:v format, got %v", filter)
+	}
+	key := strings.ToLower(sp[0]) // Make key case insensitive
+	value := sp[1]
+	switch key {
+	case azureTagName:
+		re, err := regexp.Compile(value)
+		if err != nil {
+			return false, err
+		}
+		if re.MatchString(app.ApplicationName) {
+			return true, nil
+		}
+	default:
+		if tagV, ok := app.Tags[key]; ok {
+			re, err := regexp.Compile(value)
+			if err != nil {
+				return false, err
+			}
+			if re.MatchString(tagV) {
+				return true, nil
+			}
+		}
+
+	}
+	return false, nil
 }
 
 func AzureAIListApps(prefix string, e *State) (r *Results, err error) {
@@ -194,10 +249,21 @@ func AzureAIListApps(prefix string, e *State) (r *Results, err error) {
 				return r, err
 			}
 			comp := rList.Value()
+			azTags := make(map[string]string)
+			if comp.Tags != nil {
+				for k, v := range comp.Tags {
+					if v != nil {
+						azTags[k] = *v
+						continue
+					}
+					azTags[k] = ""
+				}
+			}
 			if comp.ID != nil && comp.ApplicationInsightsComponentProperties != nil && comp.ApplicationInsightsComponentProperties.AppID != nil {
 				applist.Applications = append(applist.Applications, AzureApplicationInsightsApp{
 					ApplicationName: *comp.Name,
 					AppId:           *comp.ApplicationInsightsComponentProperties.AppID,
+					Tags:            azTags,
 				})
 			}
 		}
